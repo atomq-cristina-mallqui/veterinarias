@@ -401,6 +401,223 @@ def list_available_slots(
     return out
 
 
+def get_user_booking_context(
+    tool_context: ToolContext,
+    target_date: Optional[str] = None,
+    service_code: Optional[str] = None,
+    preferred_time: Optional[str] = None,
+) -> dict:
+    """Devuelve contexto consolidado del usuario para reducir múltiples tool-calls.
+
+    Incluye cliente, mascotas, próximas citas y (opcional) disponibilidad por mascota
+    para una fecha/servicio.
+    """
+    supabase = get_supabase()
+    user_id = _resolve_user_id(tool_context)
+    tz = ZoneInfo(config.CLINIC_TIMEZONE)
+
+    client_res = (
+        supabase.table("clients")
+        .select("id, user_id, full_name, phone, email")
+        .eq("user_id", user_id)
+        .maybe_single()
+        .execute()
+    )
+    client = client_res.data if client_res and client_res.data else None
+    if not client:
+        return _ok(
+            {
+                "client": None,
+                "pets": [],
+                "upcoming_appointments": [],
+                "availability_by_pet": [],
+                "note": "client_not_registered",
+            }
+        )
+
+    tool_context.state["client_id"] = client["id"]
+    tool_context.state["client_verified"] = True
+
+    pets_res = (
+        supabase.table("pets")
+        .select("id, name, species, breed, weight_kg, size, birth_date, notes")
+        .eq("client_id", client["id"])
+        .order("name")
+        .execute()
+    )
+    pets = pets_res.data or []
+
+    appt_res = (
+        supabase.table("appointments")
+        .select(
+            "id, start_time, end_time, status, total_amount, notes, "
+            "pets(id, name, species), services(code, name), rooms(id, name), "
+            "payments(status, amount, paid_at)"
+        )
+        .eq("client_id", client["id"])
+        .gte("start_time", datetime.now(tz=tz).isoformat())
+        .neq("status", "canceled")
+        .order("start_time")
+        .limit(20)
+        .execute()
+    )
+    upcoming = [_appointment_with_relations(r, tz) for r in (appt_res.data or [])]
+
+    availability_by_pet: list[dict] = []
+    if target_date and service_code:
+        for pet in pets:
+            pet_size = pet.get("size")
+            avail = list_available_slots_impl(
+                target_date=target_date,
+                service_code=service_code,
+                pet_size=pet_size,
+                from_time=preferred_time,
+                max_slots=0,
+            )
+            availability_by_pet.append(
+                {
+                    "pet_id": pet["id"],
+                    "pet_name": pet["name"],
+                    "pet_size": pet_size,
+                    "availability": avail,
+                }
+            )
+
+    return _ok(
+        {
+            "client": client,
+            "pets": pets,
+            "upcoming_appointments": upcoming,
+            "availability_by_pet": availability_by_pet,
+            "timezone": str(tz),
+        }
+    )
+
+
+def create_multi_pet_same_time_appointments(
+    target_date: str,
+    service_code: str,
+    start_time_hhmm: str,
+    pet_ids: list[str],
+    tool_context: ToolContext,
+    notes: Optional[str] = None,
+) -> dict:
+    """Agenda múltiples mascotas en la misma hora si hay salas distintas libres."""
+    if not pet_ids:
+        return _err("missing_pets", "Debes indicar al menos una mascota.")
+
+    client_id = _resolve_client_id(tool_context)
+    if not client_id:
+        return _err("client_not_registered", "No tienes registro de cliente.")
+
+    tz = ZoneInfo(config.CLINIC_TIMEZONE)
+    try:
+        hh, mm = (int(x) for x in start_time_hhmm.split(":")[:2])
+    except Exception:
+        return _err("invalid_time", "Hora inválida. Usa formato HH:MM.")
+    start_local = datetime.fromisoformat(f"{target_date}T{hh:02d}:{mm:02d}:00").replace(tzinfo=tz)
+
+    supabase = get_supabase()
+    pets_res = (
+        supabase.table("pets")
+        .select("id, client_id, name, species, size")
+        .in_("id", pet_ids)
+        .execute()
+    )
+    pets = pets_res.data or []
+    if len(pets) != len(set(pet_ids)):
+        return _err("pet_not_found", "Una o más mascotas no existen.")
+    if any(p["client_id"] != client_id for p in pets):
+        return _err("pet_not_yours", "Una o más mascotas no pertenecen a tu cuenta.")
+
+    # Misma lógica por mascota: si no hay capacidad para todas, fallar de forma clara.
+    planned: list[dict] = []
+    used_rooms: set[str] = set()
+    for pet in sorted(pets, key=lambda x: x["name"]):
+        try:
+            svc = resolve_service(service_code, pet.get("size"))
+        except ValueError as e:
+            return _err("service_resolution", str(e), pet_name=pet["name"])
+        end_local = start_local + timedelta(minutes=svc.duration_min)
+        rooms = (
+            supabase.table("rooms")
+            .select("id, name")
+            .eq("room_type", svc.room_type)
+            .eq("is_active", True)
+            .order("name")
+            .execute()
+            .data
+            or []
+        )
+        chosen_room = None
+        for room in rooms:
+            if room["id"] in used_rooms:
+                continue
+            if not has_overlap(room["id"], start_local, end_local):
+                chosen_room = room
+                break
+        if not chosen_room:
+            return _err(
+                "no_room_capacity",
+                "No hay suficientes salas libres para todas las mascotas a esa misma hora.",
+                requested_pets=len(pet_ids),
+                assigned=len(planned),
+            )
+        used_rooms.add(chosen_room["id"])
+        planned.append(
+            {
+                "pet": pet,
+                "svc": svc,
+                "room": chosen_room,
+                "start_local": start_local,
+                "end_local": end_local,
+            }
+        )
+
+    results: list[dict] = []
+    for plan in planned:
+        payload = {
+            "client_id": client_id,
+            "pet_id": plan["pet"]["id"],
+            "service_id": plan["svc"].id,
+            "room_id": plan["room"]["id"],
+            "start_time": plan["start_local"].isoformat(),
+            "end_time": plan["end_local"].isoformat(),
+            "status": "scheduled",
+            "total_amount": plan["svc"].price,
+            "notes": notes,
+        }
+        inserted = supabase.table("appointments").insert(payload).execute()
+        appt = inserted.data[0]
+        supabase.table("payments").insert(
+            {
+                "appointment_id": appt["id"],
+                "amount": plan["svc"].price,
+                "status": "pending",
+                "method": "simulated",
+            }
+        ).execute()
+        results.append(
+            {
+                "appointment_id": appt["id"],
+                "pet_name": plan["pet"]["name"],
+                "service": plan["svc"].name,
+                "room": plan["room"]["name"],
+                "start_time": plan["start_local"].isoformat(),
+                "end_time": plan["end_local"].isoformat(),
+                "amount": plan["svc"].price,
+            }
+        )
+
+    return _ok(
+        {
+            "scheduled": results,
+            "count": len(results),
+            "same_start_time": start_local.isoformat(),
+        }
+    )
+
+
 def _resolve_client_id(tool_context: ToolContext) -> Optional[str]:
     state = tool_context.state
     if state.get("client_id"):

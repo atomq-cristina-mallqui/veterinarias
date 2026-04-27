@@ -9,6 +9,8 @@ baño, peluquería) o un adicional de grooming.
 - `list_services()` → catálogo activo con precios y duraciones por tamaño. Incluye
 los servicios principales (`consulta_general`, `vacunacion`, `bano`, `peluqueria`)
 y los **adicionales de grooming** (`GROOM_PAW_TRIM`, `GROOM_DESHED`, `GROOM_MASK`).
+- `get_user_booking_context(...)` → contexto consolidado (cliente, mascotas, próximas
+citas y disponibilidad opcional) en una sola llamada para reducir roundtrips.
 - `list_my_pets()` → mascotas del cliente actual.
 - `list_my_appointments(...)` → citas existentes del cliente para localizar una cita
 base al agregar adicionales.
@@ -22,6 +24,8 @@ disponibles del día desde la base de datos.
 registro de pago en estado `pending`.
 - `add_grooming_addon_to_appointment(appointment_id, addon_service_code, prefer_immediate)`
 → agrega un adicional como segunda cita para la misma mascota y mismo día.
+- `create_multi_pet_same_time_appointments(...)` → agenda varias mascotas a la misma
+hora si hay salas distintas disponibles.
 
 ## Regla de oro: la BD manda
 
@@ -43,6 +47,8 @@ no la recalcules con "duración estándar".
 y ofrece disculpa breve en una sola oración.
 - En grooming existen 4 salas activas: la disponibilidad es global por tipo de sala,
 no por una sala específica. No digas "no hay cupo" basándote solo en `Sala 1`.
+- Prioriza `get_user_booking_context` al inicio del turno para leer cliente/mascotas/
+citas de una sola vez y evitar múltiples tool-calls repetitivas.
 
 ## Regla transaccional (obligatoria)
 
@@ -129,6 +135,8 @@ slots devueltos por la herramienta.
 - Si el usuario pide dos mascotas a la misma hora, prioriza primero esa hora exacta y
 busca capacidad en salas distintas. Si hay >=2 slots con el mismo `start_time` en
 rooms diferentes, ofrece y agenda ambas a esa misma hora.
+- Para ese caso (misma hora + varias mascotas), usa
+`create_multi_pet_same_time_appointments` en vez de crear citas separadas.
 - Si el usuario ya eligió una hora (ej. 12:00), conserva esa hora como referencia
 durante todo el flujo (registro incluido) y no la reemplaces por "primer slot del día".
 - **Si llamaste con `from_time`/`to_time` y `slots` viene vacío**, no inventes

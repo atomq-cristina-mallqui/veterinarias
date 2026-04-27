@@ -46,18 +46,20 @@ ADK Runner (root_agent)
 Supabase Postgres
 ```
 
-### Diagrama operativo (actual)
+### Diagrama operativo (v2 ultra-rapida)
 
 ```mermaid
 flowchart LR
   userMsg[Usuario WhatsApp] --> metaApi[Meta Cloud API]
   metaApi --> webhook[FastAPI webhook whatsapp_app]
   webhook --> dedup[Dedup por message_id]
-  dedup --> perUserLock[Lock por wa_id]
+  dedup --> queue[Burst queue por wa_id debounce 0.9s]
+  queue --> perUserLock[Worker unico + lock por wa_id]
   perUserLock --> sessionRouter[Session router timeout o reset]
   sessionRouter --> runner[ADK Runner root_agent]
   runner --> subAgents[Sub agentes y tools]
   subAgents --> supabase[(Supabase Postgres)]
+  subAgents --> toolsFast[Tools compuestas de scheduling]
   runner --> sender[Graph API send message]
   sender --> userMsg
 ```
@@ -67,8 +69,46 @@ Notas:
 - `session_id` se resuelve por payload, timeout de inactividad o `unsubscribe-session`.
 - El lock por `wa_id` evita carreras de sesión (`stale session`) cuando llegan retries
   o mensajes casi simultáneos.
+- La burst queue agrupa mensajes seguidos del mismo usuario para evitar doble respuesta
+  y reducir turnos LLM innecesarios.
 - En disponibilidad grooming, se consideran **todas las salas libres por horario** para
   soportar dos mascotas a la misma hora en salas distintas.
+- Scheduling ahora tiene tools compuestas (`get_user_booking_context`,
+  `create_multi_pet_same_time_appointments`) para bajar roundtrips a BD.
+
+### Puntos medibles de arquitectura (SLI/SLO)
+
+Mide estos puntos directamente en logs y SQL para saber donde optimizar:
+
+- `P1 Ingreso webhook`: tiempo desde llegada POST hasta `200 OK`.
+  Objetivo: p95 < 200 ms.
+- `P2 Dedup`: porcentaje de eventos duplicados descartados (`message_id` repetido).
+  Objetivo: >= 99% de retries no generan respuesta doble.
+- `P3 Queue burst`: cantidad de mensajes agrupados por burst (`n>=2`) y tiempo en cola.
+  Objetivo: cola promedio < 1.2 s.
+- `P4 Session router`: `resolve_ms` (resolucion de session_id + carga de sesion).
+  Objetivo: p95 < 120 ms.
+- `P5 Runner`: `runner_ms` (ADK + LLM + tools).
+  Objetivo: p95 < 2200 ms para turnos simples; p95 < 4500 ms para turnos con agenda.
+- `P6 Envio Graph API`: `send_ms`.
+  Objetivo: p95 < 700 ms.
+- `P7 Total end-to-end`: `total_ms` por mensaje procesado.
+  Objetivo: p50 <= 3000 ms, p95 <= 6000 ms.
+- `P8 Calidad conversacional`: porcentaje de turnos con repregunta redundante (nombre,
+  telefono, email en WhatsApp).
+  Objetivo: < 1%.
+- `P9 Coherencia agenda`: citas duplicadas para misma mascota/servicio/hora.
+  Objetivo: 0 en produccion.
+
+### Instrumentacion implementada
+
+- Logs estructurados por turno en `whatsapp_app.py`:
+  - `resolve_ms`
+  - `runner_ms`
+  - `send_ms`
+  - `total_ms`
+- Marca de `reset_session` con tiempo total.
+- Base para dashboard: parsear logs `wa_metrics` en Railway/Log drain.
 
 ### Capas de memoria y datos
 
