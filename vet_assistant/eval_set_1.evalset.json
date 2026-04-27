@@ -1,0 +1,180 @@
+{
+  "eval_set_id": "eval_set_1",
+  "name": "eval_set_1",
+  "eval_cases": [
+    {
+      "eval_id": "hola",
+      "conversation": [
+        {
+          "invocation_id": "e-b4c86d85-16d0-40aa-ad99-63abe7e558b2",
+          "user_content": {
+            "parts": [
+              {
+                "text": "hola!"
+              }
+            ],
+            "role": "user"
+          },
+          "final_response": {
+            "parts": [
+              {
+                "text": "¡Hola! Muchas gracias por la bienvenida. Estoy aquí para ayudarte con cualquier consulta sobre tu mascota. ¿En qué puedo asistirte hoy?"
+              }
+            ],
+            "role": "model"
+          },
+          "intermediate_data": {
+            "invocation_events": [
+              {
+                "author": "lucy_root",
+                "content": {
+                  "parts": [
+                    {
+                      "function_call": {
+                        "id": "call_8SEkwJB00ZHyMeG6fEpKwrkH",
+                        "args": {
+                          "request": "¡Hola, bienvenido a Patitas Felices! ¿En qué puedo ayudarte hoy?"
+                        },
+                        "name": "chitchat_agent"
+                      }
+                    }
+                  ],
+                  "role": "model"
+                }
+              },
+              {
+                "author": "lucy_root",
+                "content": {
+                  "parts": [
+                    {
+                      "function_response": {
+                        "id": "call_8SEkwJB00ZHyMeG6fEpKwrkH",
+                        "name": "chitchat_agent",
+                        "response": {
+                          "result": "¡Hola! Muchas gracias por la bienvenida. Estoy aquí para ayudarte con cualquier consulta sobre tu mascota. ¿En qué puedo asistirte hoy?"
+                        }
+                      }
+                    }
+                  ],
+                  "role": "user"
+                }
+              }
+            ]
+          },
+          "creation_timestamp": 1777241833.177292
+        },
+        {
+          "invocation_id": "e-373f4e98-aa52-4b65-9603-97582aca8c28",
+          "user_content": {
+            "parts": [
+              {
+                "text": "que puedes hacer por mi?"
+              }
+            ],
+            "role": "user"
+          },
+          "final_response": {
+            "parts": [
+              {
+                "text": "Puedo ayudarte con varias cosas, como:\n\n- Agendar citas para consultas, baños o peluquerías.\n- Responder a preguntas sobre nuestros servicios, precios y horarios.\n- Ayudarte a registrar a tu mascota o actualizar su información.\n- Consultar detalles sobre tus citas existentes y gestionarlas.\n\n¿Qué necesitas hoy?"
+              }
+            ],
+            "role": "model"
+          },
+          "intermediate_data": {},
+          "creation_timestamp": 1777241853.162773
+        },
+        {
+          "invocation_id": "e-9d1e9d4b-bd96-47de-937d-ee8e258527de",
+          "user_content": {
+            "parts": [
+              {
+                "text": "quiero agendar una cita para mi perrito Milo"
+              }
+            ],
+            "role": "user"
+          },
+          "final_response": {
+            "parts": [
+              {
+                "text": "¡Genial! Primero, necesito registrar a Milo. ¿Puedes proporcionarme el nombre completo de tu perrito, su raza y peso? También necesito tu nombre y número de teléfono para completar el registro."
+              }
+            ],
+            "role": "model"
+          },
+          "intermediate_data": {},
+          "creation_timestamp": 1777241867.86904
+        },
+        {
+          "invocation_id": "e-bfb70244-58a4-4d2d-a4c2-cb504e2ecc6a",
+          "user_content": {
+            "parts": [
+              {
+                "text": "Milo, salchicha, 10kg"
+              }
+            ],
+            "role": "user"
+          },
+          "final_response": {
+            "parts": [
+              {
+                "text": "Gracias por la información. Tu nombre y número de teléfono, por favor, para poder completar el registro de Milo."
+              }
+            ],
+            "role": "model"
+          },
+          "intermediate_data": {},
+          "creation_timestamp": 1777241885.143359
+        },
+        {
+          "invocation_id": "e-ff0ea31a-7d34-4d98-85c5-ec0318ad388c",
+          "user_content": {
+            "parts": [
+              {
+                "text": "soy Cristina Mallqui con 933470751"
+              }
+            ],
+            "role": "user"
+          },
+          "intermediate_data": {
+            "invocation_events": [
+              {
+                "author": "lucy_root",
+                "content": {
+                  "parts": [
+                    {
+                      "function_call": {
+                        "id": "call_tEK30vTHcEyn2L0nASdlrBlw",
+                        "args": {
+                          "request": "Registrar a la cliente Cristina Mallqui, teléfono 933470751, con su mascota Milo, raza salchicha, 10kg."
+                        },
+                        "name": "client_pet_agent"
+                      }
+                    },
+                    {
+                      "function_call": {
+                        "id": "call_DEaZlAnEudpkGD7Gl7SU4MnY",
+                        "args": {
+                          "request": "Agendar cita para baño de Milo, tamaño mediano."
+                        },
+                        "name": "scheduling_agent"
+                      }
+                    }
+                  ],
+                  "role": "model"
+                }
+              }
+            ]
+          },
+          "creation_timestamp": 1777241902.260295
+        }
+      ],
+      "session_input": {
+        "app_name": "vet_assistant",
+        "user_id": "user"
+      },
+      "creation_timestamp": 1777241972.1054459
+    }
+  ],
+  "creation_timestamp": 1777241730.1991198
+}

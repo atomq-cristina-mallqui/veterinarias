@@ -1,0 +1,9 @@
+[project]
+name = "vet-assistant"
+version = "0.1.0"
+description = "Asistente conversacional multi-agente para veterinaria con Google ADK + Gemini + Supabase"
+requires-python = ">=3.10"
+readme = "README.md"
+
+[tool.setuptools.packages.find]
+include = ["vet_assistant*"]
