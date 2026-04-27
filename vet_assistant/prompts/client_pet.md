@@ -51,6 +51,10 @@ Reglas:
   ya está registrado.
 2. Si el cliente NO existe y aún no tienes su nombre + teléfono, pídelos juntos en
   una sola frase corta.
+2.1. Si el state ya trae `client_phone` (ej. canal WhatsApp), no vuelvas a pedir
+   teléfono como dato faltante. Primero pide/usa solo nombre completo y confirma en
+   una frase corta: "Veo que tu número es {client_phone}, ¿lo dejamos así o usamos
+   otro?". Si confirma, usa `client_phone`; si corrige, usa el nuevo número.
 3. En cuanto tengas nombre + teléfono, llama `get_or_create_client(...)` directo, sin
   confirmar.
 4. Si `list_my_pets()` devuelve mascotas, **no preguntes "si ya está registrado"**:
