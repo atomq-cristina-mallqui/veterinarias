@@ -8,7 +8,6 @@ import uuid
 import asyncio
 from typing import Any
 from datetime import datetime, timedelta, timezone
-from dataclasses import dataclass
 
 import httpx
 from google.adk.runners import Runner
@@ -31,21 +30,11 @@ _RESET_SESSION_COMMAND = "unsubscribe-session"
 _DEDUP_TTL = timedelta(hours=24)
 _processed_message_ids: dict[str, datetime] = {}
 _user_locks: dict[str, asyncio.Lock] = {}
-_QUEUE_DEBOUNCE_MS = 900
-_pending_messages: dict[str, list["PendingMessage"]] = {}
-_active_workers: set[str] = set()
 
 
 class WhatsAppWebhookPayload(BaseModel):
     object: str | None = None
     entry: list[dict[str, Any]] = []
-
-
-@dataclass
-class PendingMessage:
-    text: str
-    whatsapp_session_id: str | None
-    queued_at_utc: datetime
 
 
 def _extract_message(payload: dict[str, Any]) -> dict[str, str | None]:
@@ -366,65 +355,6 @@ async def _process_incoming_message(
         )
 
 
-def _enqueue_pending_message(
-    wa_id: str,
-    incoming_text: str,
-    whatsapp_session_id: str | None,
-) -> None:
-    _pending_messages.setdefault(wa_id, []).append(
-        PendingMessage(
-            text=incoming_text,
-            whatsapp_session_id=whatsapp_session_id,
-            queued_at_utc=datetime.now(timezone.utc),
-        )
-    )
-
-
-async def _drain_user_queue(wa_id: str) -> None:
-    try:
-        while True:
-            await asyncio.sleep(_QUEUE_DEBOUNCE_MS / 1000.0)
-            pending = _pending_messages.get(wa_id, [])
-            if not pending:
-                return
-            _pending_messages[wa_id] = []
-
-            # Si en el burst aparece reset, ejecuta reset explícito.
-            reset_msg = next(
-                (m for m in reversed(pending) if m.text.strip().lower() == _RESET_SESSION_COMMAND),
-                None,
-            )
-            if reset_msg:
-                await _process_incoming_message(
-                    wa_id=wa_id,
-                    incoming_text=_RESET_SESSION_COMMAND,
-                    whatsapp_session_id=reset_msg.whatsapp_session_id,
-                )
-                continue
-
-            combined_text = pending[-1].text
-            if len(pending) > 1:
-                # En burst, priorizamos el último mensaje, pero mantenemos contexto breve.
-                previous = [m.text for m in pending[:-1] if m.text.strip()]
-                if previous:
-                    combined_text = (
-                        "Contexto reciente (mensajes previos del usuario): "
-                        + " | ".join(previous[-2:])
-                        + "\nMensaje actual: "
-                        + pending[-1].text
-                    )
-
-            await _process_incoming_message(
-                wa_id=wa_id,
-                incoming_text=combined_text,
-                whatsapp_session_id=pending[-1].whatsapp_session_id,
-            )
-    finally:
-        _active_workers.discard(wa_id)
-        if not _pending_messages.get(wa_id):
-            _pending_messages.pop(wa_id, None)
-
-
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -467,17 +397,10 @@ async def receive_whatsapp_webhook(
         return {"ok": True}
 
     # ACK rápido para evitar reintentos del webhook de Meta por timeout.
-    # Encolamos por usuario y procesamos en worker único para reducir colas y carreras.
-    def _schedule_queue() -> None:
-        _enqueue_pending_message(
-            wa_id=wa_id,
-            incoming_text=incoming_text,
-            whatsapp_session_id=whatsapp_session_id,
-        )
-        if wa_id in _active_workers:
-            return
-        _active_workers.add(wa_id)
-        asyncio.create_task(_drain_user_queue(wa_id))
-
-    background_tasks.add_task(_schedule_queue)
+    background_tasks.add_task(
+        _process_incoming_message,
+        wa_id,
+        incoming_text,
+        whatsapp_session_id,
+    )
     return {"ok": True}
