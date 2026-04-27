@@ -2,6 +2,6 @@
   "$schema": "https://schema.railpack.com",
   "provider": "python",
   "deploy": {
-    "startCommand": "adk web . --host 0.0.0.0 --port $PORT"
+    "startCommand": "uvicorn vet_assistant.whatsapp_app:app --host 0.0.0.0 --port $PORT"
   }
 }
