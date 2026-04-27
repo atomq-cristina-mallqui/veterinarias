@@ -507,9 +507,19 @@ def create_appointment(
             chosen_room = room
             break
     if not chosen_room:
+        from_hhmm = f"{start_local.hour:02d}:{start_local.minute:02d}"
+        nearby = list_available_slots_impl(
+            target_date=start_local.date().isoformat(),
+            service_code=service_code,
+            pet_size=pet.get("size"),
+            from_time=from_hhmm,
+            max_slots=5,
+        )
+        nearby_slots = (nearby or {}).get("slots") or []
         return _err(
             "no_room_available",
             "No hay sala libre en ese horario. ¿Te muestro otros slots?",
+            alternatives=nearby_slots,
         )
 
     payload = {
