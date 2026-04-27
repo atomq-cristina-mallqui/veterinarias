@@ -19,27 +19,47 @@ antes).
 
 ## Arquitectura
 
-Patrón **coordinador** con sub-agentes especializados invocados como tools (`AgentTool`):
+La arquitectura actual está optimizada para canal WhatsApp + backend único en Railway:
 
-```
-                      RootAgent (Lucy)
-                            │
-   ┌──────────┬─────────────┼─────────────┬─────────────┐
-   ▼          ▼             ▼             ▼             ▼             ▼
-chitchat   faq        client_pet    scheduling   management    payment
-                          │              │           │            │
-                          └────── tools Supabase ────┴────────────┘
+```text
+WhatsApp User
+    |
+    v
+Meta WhatsApp Cloud API
+    |
+    v
+Webhook (Railway)  ->  GET /webhook/whatsapp (verify)
+    |               ->  POST /webhook/whatsapp (mensajes entrantes)
+    v
+vet_assistant/whatsapp_app.py
+    |
+    v
+ADK Runner (root_agent)
+    |
+    +--> sub_agents (faq, chitchat, client_pet, scheduling, appointment_management, payment)
+    |
+    +--> tools Supabase (citas, clientes, mascotas, pagos, disponibilidad)
+    |
+    +--> Session Service (DatabaseSessionService)
+            | (tablas ADK en Supabase: sessions, events, adk_internal_metadata)
+            v
+Supabase Postgres
 ```
 
-- El `RootAgent` es el único que conversa con el usuario y reformula las salidas de los
-sub-agentes en su propia voz.
-- Cada sub-agente tiene un prompt corto y un set acotado de tools.
-- Las tools son funciones Python que ADK introspecciona automáticamente y persisten en
-Supabase.
-- El estado de sesión (`tool_context.state`) guarda `user_id`, `client_id`,
-`selected_pet_id`, `last_quoted_slot`, etc., para mantener el contexto entre turnos.
-- Memoria persistente entre sesiones en la tabla `user_summaries` (resumen de
-preferencias, mascotas, últimas citas).
+### Capas de memoria y datos
+
+- **Datos operativos**: `clients`, `pets`, `appointments`, `payments`, etc.
+- **Memoria resumida entre sesiones**: `user_summaries`.
+- **Historial conversacional turno a turno (ADK)**: tablas `sessions` y `events`.
+- **Estado de sesión**: `tool_context.state` (`user_id`, `client_id`,
+`selected_pet_id`, `last_quoted_slot`, `client_phone`, etc.).
+
+### Principio clave
+
+- El `RootAgent` es el único que conversa con el usuario.
+- Los sub-agentes se invocan como tools y Lucy reformula la respuesta final.
+- En WhatsApp, la identidad se basa en `wa_id` (número): `user_id=session_id=wa_id`,
+así se conserva continuidad real por usuario.
 
 ## Estructura
 
@@ -49,6 +69,7 @@ vet_adk/
     agent.py                       # root_agent + InstructionProvider con fecha y memoria
     callbacks.py                   # init_session_state (carga client_id y resumen)
     config.py                      # carga .env, proveedor/modelo LLM, constantes
+    whatsapp_app.py                # webhook WhatsApp (Meta) + Runner ADK
     sub_agents/                    # 6 sub-agentes especializados
     tools/
       supabase_client.py           # cliente Supabase singleton
@@ -57,7 +78,7 @@ vet_adk/
       pet_size_rules.py            # mapeo peso → tamaño
     prompts/                       # un .md por agente
   supabase/
-    schema.sql                     # CREATE TABLE de las 9 tablas
+    schema.sql                     # CREATE TABLE de tablas de negocio + user_summaries
     seed.sql                       # datos de muestra (3 clientes, 5 mascotas, 4 citas)
   scripts/init_db.py               # aplica schema+seed contra Supabase
 ```
@@ -81,7 +102,11 @@ Copia `.env.example` a `.env` y completa:
 - `OPENAI_MODEL`: modelo OpenAI, por defecto `gpt-4o-mini`.
 - `GOOGLE_API_KEY`: opcional, solo si quieres usar fallback Gemini.
 - `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY`: tu proyecto Supabase
-- `SUPABASE_DB_URL`: connection string Postgres (solo para inicializar la BD)
+- `SUPABASE_DB_URL`: connection string Postgres (inicializar BD + sesiones ADK en DB)
+- `WHATSAPP_ACCESS_TOKEN`: token de WhatsApp Cloud API (Meta)
+- `WHATSAPP_PHONE_NUMBER_ID`: id del número de WhatsApp en Meta
+- `WHATSAPP_VERIFY_TOKEN`: token para validar webhook de Meta
+- `WHATSAPP_API_VERSION`: por defecto `v23.0`
 
 ### 3. Inicializar la base de datos
 
@@ -100,17 +125,79 @@ python scripts/init_db.py --verify   # solo verifica conteos
 **Opción C — MCP de Supabase desde el agente IDE**: pídele al asistente que aplique el
 schema y seed con su MCP de Supabase.
 
-### 4. Correr ADK Web
+### 4. Correr local (dos modos)
+
+#### Modo A: ADK Web (debug / playground)
 
 Desde la raíz del repo:
 
 ```bash
-adk web
+adk web .
 ```
 
 Abre [http://localhost:8000](http://localhost:8000) → selecciona el agente `**vet_assistant**` → crea una sesión
 con `user_id = user_demo_1` (ya existe en el seed con la cliente Cristina Ramos y sus
 mascotas Toby y Mishi).
+
+#### Modo B: Webhook WhatsApp local (backend HTTP)
+
+```bash
+uvicorn vet_assistant.whatsapp_app:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Checks rápidos:
+
+- `GET http://localhost:8000/health` -> `{"status":"ok"}`
+- `GET /webhook/whatsapp?...` debe devolver `hub.challenge` en texto plano.
+
+Para probar con Meta en local necesitas túnel (ej. ngrok).
+
+### 5. Deploy en Railway (producción)
+
+Este repo está preparado para Railway con:
+
+- `railpack.json` (`provider: python`)
+- `startCommand`: `uvicorn vet_assistant.whatsapp_app:app --host 0.0.0.0 --port $PORT`
+
+Pasos:
+
+1. Conecta el repo en Railway.
+2. Configura variables de entorno (`OPENAI_*`, `SUPABASE_*`, `WHATSAPP_*`).
+3. Verifica `https://<tu-dominio>.up.railway.app/health`.
+4. En Meta configura webhook:
+  - URL: `https://<tu-dominio>.up.railway.app/webhook/whatsapp`
+  - Verify token: mismo valor de `WHATSAPP_VERIFY_TOKEN`
+  - Suscripción mínima: campo `messages`
+
+## Flujo WhatsApp end-to-end
+
+1. Usuario envía mensaje en WhatsApp.
+2. Meta envía `POST` al webhook.
+3. `whatsapp_app.py` extrae `wa_id` y texto.
+4. Crea/recupera sesión ADK (`user_id=session_id=wa_id`) en `DatabaseSessionService`.
+5. Ejecuta `root_agent` con sub-agentes/tools.
+6. Lee/escribe Supabase (citas, clientes, memoria).
+7. Envía respuesta por Graph API a WhatsApp.
+
+## Tablas en Supabase que debes ver
+
+### Tablas de negocio (propias del proyecto)
+
+- `clients`
+- `pets`
+- `appointments`
+- `payments`
+- `services`
+- `service_durations`
+- `rooms`
+- `clinic_settings`
+- `user_summaries`
+
+### Tablas de sesión conversacional (creadas por ADK)
+
+- `sessions`
+- `events`
+- `adk_internal_metadata`
 
 ## Datos de muestra incluidos
 

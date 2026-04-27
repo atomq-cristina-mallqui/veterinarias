@@ -83,6 +83,8 @@ def get_or_create_client(
     """
     supabase = get_supabase()
     user_id = _resolve_user_id(tool_context)
+    state_phone = tool_context.state.get("client_phone")
+    phone_from_state = str(state_phone).strip() if state_phone else None
 
     existing = (
         supabase.table("clients")
@@ -107,7 +109,8 @@ def get_or_create_client(
     payload = {
         "user_id": user_id,
         "full_name": full_name.strip(),
-        "phone": phone.strip() if phone else None,
+        # En canal WhatsApp, el teléfono de registro debe ser el wa_id precargado.
+        "phone": phone_from_state or (phone.strip() if phone else None),
         "email": email.strip() if email else None,
     }
     inserted = supabase.table("clients").insert(payload).execute()

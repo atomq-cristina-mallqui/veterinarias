@@ -4,13 +4,15 @@ from __future__ import annotations
 import logging
 import re
 import inspect
+import uuid
 from typing import Any
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from google.adk.runners import Runner
 from google.adk.sessions import DatabaseSessionService, InMemorySessionService
 from google.genai import types
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
@@ -22,6 +24,10 @@ LOGGER = logging.getLogger("vet_assistant.whatsapp")
 app = FastAPI(title="Vet Assistant WhatsApp Webhook")
 
 _APP_NAME = "vet_assistant"
+_SESSION_TIMEOUT = timedelta(hours=2)
+_RESET_SESSION_COMMAND = "unsubscribe-session"
+_DEDUP_TTL = timedelta(hours=24)
+_processed_message_ids: dict[str, datetime] = {}
 
 
 class WhatsAppWebhookPayload(BaseModel):
@@ -29,23 +35,50 @@ class WhatsAppWebhookPayload(BaseModel):
     entry: list[dict[str, Any]] = []
 
 
-def _extract_message(payload: dict[str, Any]) -> tuple[str | None, str | None]:
-    """Extrae (wa_id, texto) del payload de WhatsApp."""
+def _extract_message(payload: dict[str, Any]) -> dict[str, str | None]:
+    """Extrae metadatos relevantes del payload de WhatsApp."""
     try:
         entry = payload.get("entry", [])
         changes = entry[0].get("changes", [])
         value = changes[0].get("value", {})
         messages = value.get("messages", [])
         if not messages:
-            return None, None
+            return {
+                "wa_id": None,
+                "text": None,
+                "message_id": None,
+                "whatsapp_session_id": None,
+            }
         message = messages[0]
         wa_id = message.get("from")
+        message_id = message.get("id")
+        # Algunas integraciones/proxies incluyen session_id en value/message.
+        whatsapp_session_id = (
+            value.get("session_id")
+            or message.get("session_id")
+            or (value.get("conversation") or {}).get("id")
+        )
         if message.get("type") == "text":
             text = message.get("text", {}).get("body")
-            return wa_id, text
-        return wa_id, None
+            return {
+                "wa_id": wa_id,
+                "text": text,
+                "message_id": message_id,
+                "whatsapp_session_id": whatsapp_session_id,
+            }
+        return {
+            "wa_id": wa_id,
+            "text": None,
+            "message_id": message_id,
+            "whatsapp_session_id": whatsapp_session_id,
+        }
     except (KeyError, IndexError, AttributeError):
-        return None, None
+        return {
+            "wa_id": None,
+            "text": None,
+            "message_id": None,
+            "whatsapp_session_id": None,
+        }
 
 
 def _normalize_db_url_for_adk(db_url: str) -> str:
@@ -104,13 +137,63 @@ async def _call_maybe_async(result):
     return result
 
 
-async def _ensure_adk_session(wa_id: str) -> None:
-    """Garantiza que exista una sesión ADK para el wa_id actual."""
+def _prune_processed_message_ids(now_utc: datetime) -> None:
+    to_delete = [
+        message_id
+        for message_id, seen_at in _processed_message_ids.items()
+        if now_utc - seen_at > _DEDUP_TTL
+    ]
+    for message_id in to_delete:
+        _processed_message_ids.pop(message_id, None)
+
+
+def _mark_message_seen(message_id: str | None) -> bool:
+    """Devuelve True si es mensaje nuevo; False si ya fue procesado."""
+    if not message_id:
+        return True
+    now_utc = datetime.now(timezone.utc)
+    _prune_processed_message_ids(now_utc)
+    if message_id in _processed_message_ids:
+        return False
+    _processed_message_ids[message_id] = now_utc
+    return True
+
+
+async def _resolve_session_id(
+    wa_id: str,
+    user_text: str,
+    whatsapp_session_id: str | None,
+) -> str:
+    """Resuelve session_id según prioridad WhatsApp > comando reset > timeout."""
+    if whatsapp_session_id:
+        return whatsapp_session_id
+
+    if user_text.strip().lower() == _RESET_SESSION_COMMAND:
+        return f"wa-{wa_id}-{uuid.uuid4().hex[:10]}"
+
+    sessions_resp = await _call_maybe_async(
+        _session_service.list_sessions(app_name=_APP_NAME, user_id=wa_id)
+    )
+    sessions = list(getattr(sessions_resp, "sessions", []) or [])
+    if not sessions:
+        return f"wa-{wa_id}-{uuid.uuid4().hex[:10]}"
+
+    latest = max(sessions, key=lambda s: float(getattr(s, "last_update_time", 0.0) or 0.0))
+    last_update_epoch = float(getattr(latest, "last_update_time", 0.0) or 0.0)
+    last_update = datetime.fromtimestamp(last_update_epoch, tz=timezone.utc)
+    if datetime.now(timezone.utc) - last_update > _SESSION_TIMEOUT:
+        return f"wa-{wa_id}-{uuid.uuid4().hex[:10]}"
+
+    return str(latest.id)
+
+
+async def _ensure_adk_session(wa_id: str, session_id: str) -> None:
+    """Garantiza que exista la sesión ADK resuelta para el usuario."""
     session = await _call_maybe_async(
         _session_service.get_session(
             app_name=_APP_NAME,
             user_id=wa_id,
-            session_id=wa_id,
+            session_id=session_id,
         )
     )
     if session:
@@ -119,7 +202,7 @@ async def _ensure_adk_session(wa_id: str) -> None:
         _session_service.create_session(
             app_name=_APP_NAME,
             user_id=wa_id,
-            session_id=wa_id,
+            session_id=session_id,
             state={
                 "user_id": wa_id,
                 "client_phone": wa_id,
@@ -129,16 +212,21 @@ async def _ensure_adk_session(wa_id: str) -> None:
     )
 
 
-async def _build_reply_text(wa_id: str, user_text: str) -> str:
+async def _build_reply_text(wa_id: str, session_id: str, user_text: str) -> str:
     """Genera la respuesta vía root_agent (ADK) con sesiones persistentes."""
-    await _ensure_adk_session(wa_id)
+    await _ensure_adk_session(wa_id, session_id)
     message = types.Content(role="user", parts=[types.Part.from_text(text=user_text)])
 
     chunks: list[str] = []
     async for event in _runner.run_async(
         user_id=wa_id,
-        session_id=wa_id,
+        session_id=session_id,
         new_message=message,
+        state_delta={
+            "user_id": wa_id,
+            "client_phone": wa_id,
+            "channel": "whatsapp",
+        },
     ):
         if not event.is_final_response():
             continue
@@ -183,6 +271,33 @@ async def _send_whatsapp_text(to_wa_id: str, text: str) -> None:
             raise HTTPException(status_code=502, detail="No se pudo enviar mensaje a WhatsApp")
 
 
+async def _process_incoming_message(
+    wa_id: str,
+    incoming_text: str,
+    whatsapp_session_id: str | None,
+) -> None:
+    if incoming_text.strip().lower() == _RESET_SESSION_COMMAND:
+        fresh_session_id = await _resolve_session_id(
+            wa_id=wa_id,
+            user_text=incoming_text,
+            whatsapp_session_id=whatsapp_session_id,
+        )
+        await _ensure_adk_session(wa_id, fresh_session_id)
+        await _send_whatsapp_text(
+            wa_id,
+            "Listo, inicié una sesión nueva. ¿En qué te ayudo ahora?",
+        )
+        return
+
+    session_id = await _resolve_session_id(
+        wa_id=wa_id,
+        user_text=incoming_text,
+        whatsapp_session_id=whatsapp_session_id,
+    )
+    reply_text = await _build_reply_text(wa_id, session_id, incoming_text)
+    await _send_whatsapp_text(wa_id, reply_text)
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -205,13 +320,30 @@ def verify_whatsapp_webhook(
 
 
 @app.post("/webhook/whatsapp")
-async def receive_whatsapp_webhook(payload: WhatsAppWebhookPayload) -> dict[str, bool]:
+async def receive_whatsapp_webhook(
+    payload: WhatsAppWebhookPayload,
+    background_tasks: BackgroundTasks,
+) -> dict[str, bool]:
     """Recibe mensajes entrantes y responde con el agente."""
     body = payload.model_dump()
-    wa_id, incoming_text = _extract_message(body)
+    extracted = _extract_message(body)
+    wa_id = extracted["wa_id"]
+    incoming_text = extracted["text"]
+    message_id = extracted["message_id"]
+    whatsapp_session_id = extracted["whatsapp_session_id"]
+
     if not wa_id or not incoming_text:
         return {"ok": True}
 
-    reply_text = await _build_reply_text(wa_id, incoming_text)
-    await _send_whatsapp_text(wa_id, reply_text)
+    if not _mark_message_seen(message_id):
+        LOGGER.info("Duplicado detectado en WhatsApp, se omite respuesta. message_id=%s", message_id)
+        return {"ok": True}
+
+    # ACK rápido para evitar reintentos del webhook de Meta por timeout.
+    background_tasks.add_task(
+        _process_incoming_message,
+        wa_id,
+        incoming_text,
+        whatsapp_session_id,
+    )
     return {"ok": True}
