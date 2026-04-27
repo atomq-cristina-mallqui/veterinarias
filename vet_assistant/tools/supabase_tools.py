@@ -85,6 +85,11 @@ def get_or_create_client(
     user_id = _resolve_user_id(tool_context)
     state_phone = tool_context.state.get("client_phone")
     phone_from_state = str(state_phone).strip() if state_phone else None
+    channel = str(tool_context.state.get("channel") or "").strip().lower()
+    normalized_email = email.strip() if email else None
+    if channel == "whatsapp":
+        # En onboarding por WhatsApp no pedimos ni persistimos correo por ahora.
+        normalized_email = None
 
     existing = (
         supabase.table("clients")
@@ -111,7 +116,7 @@ def get_or_create_client(
         "full_name": full_name.strip(),
         # En canal WhatsApp, el teléfono de registro debe ser el wa_id precargado.
         "phone": phone_from_state or (phone.strip() if phone else None),
-        "email": email.strip() if email else None,
+        "email": normalized_email,
     }
     inserted = supabase.table("clients").insert(payload).execute()
     client = inserted.data[0]

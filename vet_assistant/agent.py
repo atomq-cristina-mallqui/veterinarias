@@ -23,6 +23,7 @@ from vet_assistant.sub_agents.appointment_management import appointment_manageme
 from vet_assistant.sub_agents.chitchat import chitchat_agent
 from vet_assistant.sub_agents.client_pet import client_pet_agent
 from vet_assistant.sub_agents.faq import faq_agent
+from vet_assistant.sub_agents.onboarding import onboarding_agent
 from vet_assistant.sub_agents.payment import payment_agent
 from vet_assistant.sub_agents.scheduling import scheduling_agent
 from vet_assistant.tools.supabase_tools import get_my_summary, update_my_summary
@@ -85,7 +86,8 @@ root_agent = LlmAgent(
     model=config.ACTIVE_MODEL,
     description=(
         "Asistente conversacional de la Clínica Veterinaria Patitas Felices. "
-        "Coordina saludo, FAQs, registro de cliente/mascota, agendamiento, "
+        "Coordina saludo, FAQs, onboarding de primera vez, registro de "
+        "cliente/mascota, agendamiento, "
         "reprogramación, cancelación y pagos."
     ),
     instruction=_root_instruction,
@@ -93,6 +95,7 @@ root_agent = LlmAgent(
     tools=[
         AgentTool(agent=faq_agent),
         AgentTool(agent=chitchat_agent),
+        AgentTool(agent=onboarding_agent),
         AgentTool(agent=client_pet_agent),
         AgentTool(agent=scheduling_agent),
         AgentTool(agent=appointment_management_agent),

@@ -36,7 +36,7 @@ vet_assistant/whatsapp_app.py
     v
 ADK Runner (root_agent)
     |
-    +--> sub_agents (faq, chitchat, client_pet, scheduling, appointment_management, payment)
+    +--> sub_agents (faq, chitchat, onboarding, client_pet, scheduling, appointment_management, payment)
     |
     +--> tools Supabase (citas, clientes, mascotas, pagos, disponibilidad)
     |
@@ -58,8 +58,14 @@ Supabase Postgres
 
 - El `RootAgent` es el único que conversa con el usuario.
 - Los sub-agentes se invocan como tools y Lucy reformula la respuesta final.
-- En WhatsApp, la identidad se basa en `wa_id` (número): `user_id=session_id=wa_id`,
-así se conserva continuidad real por usuario.
+- En WhatsApp, la identidad se basa en `wa_id` (número): `user_id=wa_id`.
+- `session_id` se resuelve por canal con esta prioridad:
+  1) `session_id` del payload (si llega),
+  2) nuevo `session_id` por comando `unsubscribe-session`,
+  3) rotación por inactividad (>2 horas),
+  4) reutilización de la última sesión activa.
+- Durante onboarding por WhatsApp, el teléfono de registro se toma del canal (`wa_id`)
+  y no se solicita correo.
 
 ## Estructura
 
@@ -174,7 +180,8 @@ Pasos:
 1. Usuario envía mensaje en WhatsApp.
 2. Meta envía `POST` al webhook.
 3. `whatsapp_app.py` extrae `wa_id` y texto.
-4. Crea/recupera sesión ADK (`user_id=session_id=wa_id`) en `DatabaseSessionService`.
+4. Resuelve `session_id` (payload/timeout/reset) y crea/recupera sesión ADK con
+   `user_id=wa_id` en `DatabaseSessionService`.
 5. Ejecuta `root_agent` con sub-agentes/tools.
 6. Lee/escribe Supabase (citas, clientes, memoria).
 7. Envía respuesta por Graph API a WhatsApp.

@@ -18,8 +18,8 @@ client_pet_agent = LlmAgent(
     description=(
         "Registra o actualiza al cliente y sus mascotas en la base de datos. "
         "Úsame cuando el usuario quiera registrarse, dar de alta una mascota, "
-        "o cuando se necesiten esos datos antes de agendar una cita. "
-        "Yo me encargo de pedir nombre, teléfono y datos de la mascota, "
+        "o cuando se necesiten esos datos fuera del onboarding principal. "
+        "Yo me encargo de pedir nombre y datos de la mascota, "
         "calcular el tamaño automáticamente y persistir todo."
     ),
     instruction=load_prompt("client_pet"),
