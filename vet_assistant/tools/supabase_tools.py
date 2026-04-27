@@ -61,6 +61,13 @@ def _resolve_user_id(tool_context: ToolContext) -> str:
     return anon_user_id
 
 
+def _to_local_iso(value: Optional[str], tz: ZoneInfo) -> Optional[str]:
+    """Convierte un timestamp ISO a la zona horaria de la clínica."""
+    if not value:
+        return None
+    return datetime.fromisoformat(value).astimezone(tz).isoformat()
+
+
 # =============================================================================
 # Cliente y mascota (Fase 3)
 # =============================================================================
@@ -717,7 +724,7 @@ def add_grooming_addon_to_appointment(
 # =============================================================================
 
 
-def _appointment_with_relations(row: dict) -> dict:
+def _appointment_with_relations(row: dict, tz: ZoneInfo) -> dict:
     """Aplana un row con joins de pet/service/room a un dict legible."""
     pet = row.get("pets") or {}
     svc = row.get("services") or {}
@@ -728,8 +735,8 @@ def _appointment_with_relations(row: dict) -> dict:
     return {
         "appointment_id": row["id"],
         "status": row["status"],
-        "start_time": row["start_time"],
-        "end_time": row["end_time"],
+        "start_time": _to_local_iso(row.get("start_time"), tz),
+        "end_time": _to_local_iso(row.get("end_time"), tz),
         "total_amount": float(row["total_amount"]) if row.get("total_amount") else None,
         "notes": row.get("notes"),
         "pet": {"id": pet.get("id"), "name": pet.get("name"), "species": pet.get("species")},
@@ -738,7 +745,7 @@ def _appointment_with_relations(row: dict) -> dict:
         "payment": {
             "status": payment.get("status"),
             "amount": float(payment["amount"]) if payment.get("amount") else None,
-            "paid_at": payment.get("paid_at"),
+            "paid_at": _to_local_iso(payment.get("paid_at"), tz),
         }
         if payment
         else None,
@@ -786,7 +793,7 @@ def list_my_appointments(
         q = q.neq("status", "canceled")
 
     res = q.execute()
-    items = [_appointment_with_relations(r) for r in (res.data or [])]
+    items = [_appointment_with_relations(r, tz) for r in (res.data or [])]
     return _ok(items)
 
 
@@ -1009,12 +1016,13 @@ def list_my_pending_payments(tool_context: ToolContext) -> dict:
 
     settings = (
         supabase.table("clinic_settings")
-        .select("currency")
+        .select("currency, timezone")
         .eq("id", 1)
         .single()
         .execute()
         .data
     )
+    tz = ZoneInfo(settings.get("timezone") or "America/Lima")
     res = (
         supabase.table("appointments")
         .select(
@@ -1038,7 +1046,7 @@ def list_my_pending_payments(tool_context: ToolContext) -> dict:
                 "appointment_id": row["id"],
                 "pet_name": (row.get("pets") or {}).get("name"),
                 "service_name": (row.get("services") or {}).get("name"),
-                "start_time": row["start_time"],
+                "start_time": _to_local_iso(row.get("start_time"), tz),
                 "amount": float(payment["amount"]) if payment.get("amount") else None,
                 "currency": settings.get("currency") or "PEN",
             }
@@ -1071,6 +1079,7 @@ def get_payment_status(appointment_id: str, tool_context: ToolContext) -> dict:
     payment = appt.get("payments")
     if isinstance(payment, list):
         payment = payment[0] if payment else None
+    tz = ZoneInfo(config.CLINIC_TIMEZONE)
 
     return _ok(
         {
@@ -1078,7 +1087,7 @@ def get_payment_status(appointment_id: str, tool_context: ToolContext) -> dict:
             "service": (appt.get("services") or {}).get("name"),
             "amount": float(appt["total_amount"]) if appt.get("total_amount") else None,
             "payment_status": (payment or {}).get("status"),
-            "paid_at": (payment or {}).get("paid_at"),
+            "paid_at": _to_local_iso((payment or {}).get("paid_at"), tz),
             "method": (payment or {}).get("method"),
         }
     )
