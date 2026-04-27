@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import PlainTextResponse
 from openai import OpenAI
 from pydantic import BaseModel
 
@@ -102,7 +103,7 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/webhook/whatsapp")
+@app.get("/webhook/whatsapp", response_class=PlainTextResponse)
 def verify_whatsapp_webhook(
     hub_mode: str = Query(alias="hub.mode"),
     hub_verify_token: str = Query(alias="hub.verify_token"),
@@ -115,7 +116,7 @@ def verify_whatsapp_webhook(
         raise HTTPException(status_code=500, detail="WHATSAPP_VERIFY_TOKEN no configurado")
     if hub_verify_token != config.WHATSAPP_VERIFY_TOKEN:
         raise HTTPException(status_code=403, detail="verify token invalido")
-    return hub_challenge
+    return PlainTextResponse(content=hub_challenge, status_code=200)
 
 
 @app.post("/webhook/whatsapp")
