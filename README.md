@@ -46,6 +46,30 @@ ADK Runner (root_agent)
 Supabase Postgres
 ```
 
+### Diagrama operativo (actual)
+
+```mermaid
+flowchart LR
+  userMsg[Usuario WhatsApp] --> metaApi[Meta Cloud API]
+  metaApi --> webhook[FastAPI webhook whatsapp_app]
+  webhook --> dedup[Dedup por message_id]
+  dedup --> perUserLock[Lock por wa_id]
+  perUserLock --> sessionRouter[Session router timeout o reset]
+  sessionRouter --> runner[ADK Runner root_agent]
+  runner --> subAgents[Sub agentes y tools]
+  subAgents --> supabase[(Supabase Postgres)]
+  runner --> sender[Graph API send message]
+  sender --> userMsg
+```
+
+Notas:
+- `user_id = wa_id`.
+- `session_id` se resuelve por payload, timeout de inactividad o `unsubscribe-session`.
+- El lock por `wa_id` evita carreras de sesión (`stale session`) cuando llegan retries
+  o mensajes casi simultáneos.
+- En disponibilidad grooming, se consideran **todas las salas libres por horario** para
+  soportar dos mascotas a la misma hora en salas distintas.
+
 ### Capas de memoria y datos
 
 - **Datos operativos**: `clients`, `pets`, `appointments`, `payments`, etc.

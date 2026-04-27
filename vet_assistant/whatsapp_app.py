@@ -5,6 +5,7 @@ import logging
 import re
 import inspect
 import uuid
+import asyncio
 from typing import Any
 from datetime import datetime, timedelta, timezone
 
@@ -28,6 +29,7 @@ _SESSION_TIMEOUT = timedelta(hours=2)
 _RESET_SESSION_COMMAND = "unsubscribe-session"
 _DEDUP_TTL = timedelta(hours=24)
 _processed_message_ids: dict[str, datetime] = {}
+_user_locks: dict[str, asyncio.Lock] = {}
 
 
 class WhatsAppWebhookPayload(BaseModel):
@@ -242,6 +244,22 @@ async def _build_reply_text(wa_id: str, session_id: str, user_text: str) -> str:
     return _format_for_whatsapp(reply)
 
 
+def _is_stale_session_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return (
+        isinstance(exc, ValueError)
+        and "session has been modified in storage" in message
+    )
+
+
+def _get_user_lock(wa_id: str) -> asyncio.Lock:
+    lock = _user_locks.get(wa_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _user_locks[wa_id] = lock
+    return lock
+
+
 async def _send_whatsapp_text(to_wa_id: str, text: str) -> None:
     """Envía un mensaje de texto por WhatsApp Cloud API."""
     if not config.WHATSAPP_ACCESS_TOKEN or not config.WHATSAPP_PHONE_NUMBER_ID:
@@ -276,26 +294,44 @@ async def _process_incoming_message(
     incoming_text: str,
     whatsapp_session_id: str | None,
 ) -> None:
-    if incoming_text.strip().lower() == _RESET_SESSION_COMMAND:
-        fresh_session_id = await _resolve_session_id(
+    user_lock = _get_user_lock(wa_id)
+    async with user_lock:
+        if incoming_text.strip().lower() == _RESET_SESSION_COMMAND:
+            fresh_session_id = await _resolve_session_id(
+                wa_id=wa_id,
+                user_text=incoming_text,
+                whatsapp_session_id=whatsapp_session_id,
+            )
+            await _ensure_adk_session(wa_id, fresh_session_id)
+            await _send_whatsapp_text(
+                wa_id,
+                "Listo, inicié una sesión nueva. ¿En qué te ayudo ahora?",
+            )
+            return
+
+        session_id = await _resolve_session_id(
             wa_id=wa_id,
             user_text=incoming_text,
             whatsapp_session_id=whatsapp_session_id,
         )
-        await _ensure_adk_session(wa_id, fresh_session_id)
-        await _send_whatsapp_text(
-            wa_id,
-            "Listo, inicié una sesión nueva. ¿En qué te ayudo ahora?",
-        )
-        return
-
-    session_id = await _resolve_session_id(
-        wa_id=wa_id,
-        user_text=incoming_text,
-        whatsapp_session_id=whatsapp_session_id,
-    )
-    reply_text = await _build_reply_text(wa_id, session_id, incoming_text)
-    await _send_whatsapp_text(wa_id, reply_text)
+        try:
+            reply_text = await _build_reply_text(wa_id, session_id, incoming_text)
+        except Exception as e:
+            if not _is_stale_session_error(e):
+                raise
+            LOGGER.warning(
+                "Stale session detectada para wa_id=%s session_id=%s. Reintentando una vez.",
+                wa_id,
+                session_id,
+            )
+            await asyncio.sleep(0.15)
+            retry_session_id = await _resolve_session_id(
+                wa_id=wa_id,
+                user_text=incoming_text,
+                whatsapp_session_id=whatsapp_session_id,
+            )
+            reply_text = await _build_reply_text(wa_id, retry_session_id, incoming_text)
+        await _send_whatsapp_text(wa_id, reply_text)
 
 
 @app.get("/health")

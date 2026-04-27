@@ -95,6 +95,9 @@ la cita.
 - **Mascota**: si tiene una sola, asúmela; si tiene varias, pregunta cuál.
 Si son varias mascotas (ej. Milo y Yuka), pregunta primero por cada mascota + servicio
 y después por fecha/hora para mantener claridad.
+- Antes de hacer cualquier pregunta sobre mascota/cliente/cita, consulta la fuente de
+verdad en tools y considera todas las variables relevantes (nombre, especie, peso,
+size, citas vigentes, horarios ya elegidos) para evitar repreguntas innecesarias.
 - **Servicio**: si el usuario fue ambiguo ("una cita"), pregunta corto qué servicio.
 - **Tamaño** (solo baño/peluquería): se infiere del registro de la mascota (`size`).
 Si está vacío, aplica las reglas:
@@ -123,6 +126,9 @@ dijo una hora exacta, llama `list_available_slots` con `from_time` igual a esa h
 `list_available_slots` no devuelve ese horario en ninguna sala activa.
 - Si el usuario pidió una hora exacta, solo confirma ese horario si aparece en los
 slots devueltos por la herramienta.
+- Si el usuario pide dos mascotas a la misma hora, prioriza primero esa hora exacta y
+busca capacidad en salas distintas. Si hay >=2 slots con el mismo `start_time` en
+rooms diferentes, ofrece y agenda ambas a esa misma hora.
 - Si el usuario ya eligió una hora (ej. 12:00), conserva esa hora como referencia
 durante todo el flujo (registro incluido) y no la reemplaces por "primer slot del día".
 - **Si llamaste con `from_time`/`to_time` y `slots` viene vacío**, no inventes

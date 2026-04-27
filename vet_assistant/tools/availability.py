@@ -276,6 +276,8 @@ def list_available_slots_impl(
                         conflict = True
                         break
                 if not conflict:
+                    # Guardamos todos los rooms libres en ese horario para soportar
+                    # casos multi-mascota a la misma hora en salas distintas.
                     slots.append(
                         Slot(
                             start=cursor,
@@ -284,7 +286,6 @@ def list_available_slots_impl(
                             room_name=room["name"],
                         )
                     )
-                    break  # un slot por hora; primer room libre basta
         cursor += step
 
     if max_slots and max_slots > 0:
