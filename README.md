@@ -206,6 +206,15 @@ Pasos:
 - `events`
 - `adk_internal_metadata`
 
+## Quality Gates
+
+Para mantener calidad estable antes de push/deploy:
+
+- Criterios de release: `RELEASE_CRITERIA.md`
+- Plan de pruebas y validaciones SQL: `TEST_PLAN.md`
+
+Recomendación: ejecutar ese checklist en cada cambio de prompts, tools o webhook.
+
 ## Datos de muestra incluidos
 
 - **3 clientes**: `user_demo_1` (Cristina Ramos), `user_demo_2` (Carlos Pérez),
