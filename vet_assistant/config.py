@@ -18,6 +18,19 @@ OPENAI_API_KEY: str | None = os.getenv("OPENAI_API_KEY")
 SUPABASE_URL: str | None = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY: str | None = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
+WHATSAPP_ACCESS_TOKEN: str | None = os.getenv("WHATSAPP_ACCESS_TOKEN")
+WHATSAPP_PHONE_NUMBER_ID: str | None = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
+WHATSAPP_VERIFY_TOKEN: str | None = os.getenv("WHATSAPP_VERIFY_TOKEN")
+WHATSAPP_API_VERSION: str = os.getenv("WHATSAPP_API_VERSION", "v23.0")
+WHATSAPP_SYSTEM_PROMPT: str = os.getenv(
+    "WHATSAPP_SYSTEM_PROMPT",
+    (
+        "Eres Lucy, asistente de una clinica veterinaria. Responde siempre en "
+        "espanol, de forma breve y amable, y enfocate en agendamiento, FAQ y "
+        "atencion a clientes de la clinica."
+    ),
+)
+
 DEMO_USER_ID: str = os.getenv("DEMO_USER_ID", "user_demo_1")
 ANON_USER_PREFIX: str = os.getenv("ANON_USER_PREFIX", "anon_")
 CLINIC_TIMEZONE: str = os.getenv("CLINIC_TIMEZONE", "America/Lima")

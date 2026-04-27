@@ -167,7 +167,7 @@ def list_available_slots_impl(
     target_date: str,
     service_code: str,
     pet_size: Optional[str] = None,
-    max_slots: int = 64,
+    max_slots: int = 0,
     from_time: Optional[str] = None,
     to_time: Optional[str] = None,
 ) -> dict[str, Any]:
@@ -287,7 +287,8 @@ def list_available_slots_impl(
                     break  # un slot por hora; primer room libre basta
         cursor += step
 
-    slots = slots[:max_slots]
+    if max_slots and max_slots > 0:
+        slots = slots[:max_slots]
     return {
         "ok": True,
         "service": {

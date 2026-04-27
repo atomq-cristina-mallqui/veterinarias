@@ -351,7 +351,7 @@ def list_available_slots(
     service_code: str,
     pet_size: Optional[str],
     tool_context: ToolContext,
-    max_slots: int = 64,
+    max_slots: int = 0,
     from_time: Optional[str] = None,
     to_time: Optional[str] = None,
 ) -> dict:
@@ -361,7 +361,8 @@ def list_available_slots(
         target_date: 'YYYY-MM-DD' (zona horaria America/Lima).
         service_code: 'consulta_general', 'vacunacion', 'bano' o 'peluqueria'.
         pet_size: 'small'/'medium'/'large'. Solo requerido para baño y peluquería.
-        max_slots: cuántos slots devolver (default 64).
+        max_slots: cuántos slots devolver. Si es 0 o menor, devuelve todos los
+            horarios disponibles del día (default 0).
         from_time: 'HH:MM' local. Si se pasa, solo se devuelven slots cuyo inicio sea
             >= este valor. Aplica antes del recorte por `max_slots`.
         to_time: 'HH:MM' local. Si se pasa, solo se devuelven slots cuyo inicio sea
@@ -506,9 +507,19 @@ def create_appointment(
             chosen_room = room
             break
     if not chosen_room:
+        from_hhmm = f"{start_local.hour:02d}:{start_local.minute:02d}"
+        nearby = list_available_slots_impl(
+            target_date=start_local.date().isoformat(),
+            service_code=service_code,
+            pet_size=pet.get("size"),
+            from_time=from_hhmm,
+            max_slots=5,
+        )
+        nearby_slots = (nearby or {}).get("slots") or []
         return _err(
             "no_room_available",
             "No hay sala libre en ese horario. ¿Te muestro otros slots?",
+            alternatives=nearby_slots,
         )
 
     payload = {
